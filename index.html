@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Batch Image Editor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+</head>
+
+<body class="min-h-screen bg-gradient-to-br from-gray-50 to-gray-200 flex flex-col items-center py-10 px-4">
+  <div class="w-full max-w-6xl bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
+    <h1 class="text-4xl font-bold text-center mb-8 text-gray-800">Batch Image Crop & Overlay Tool</h1>
+
+    <!-- Controls Section -->
+    <div class="grid md:grid-cols-3 lg:grid-cols-5 gap-6 mb-10">
+      <!-- Upload -->
+      <div>
+        <label class="block text-gray-700 font-semibold mb-2">Upload Images</label>
+        <input id="imageInput" type="file" accept="image/*" multiple
+               class="block w-full text-sm text-gray-700 bg-gray-50 border border-gray-300 rounded-lg cursor-pointer focus:ring-blue-500 focus:border-blue-500 p-2">
+      </div>
+
+      <!-- Crop Ratio -->
+      <div>
+        <label class="block text-gray-700 font-semibold mb-2">Crop Ratio</label>
+        <select id="ratioSelect" class="block w-full bg-gray-50 border border-gray-300 rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500">
+          <option value="1:1">1:1 (Square)</option>
+          <option value="3:4">3:4 (Portrait)</option>
+          <option value="4:3">4:3 (Landscape)</option>
+        </select>
+      </div>
+
+      <!-- Crop Position -->
+      <div>
+        <label class="block text-gray-700 font-semibold mb-2">Crop Position</label>
+        <select id="cropPosition" class="block w-full bg-gray-50 border border-gray-300 rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500">
+          <option value="center">Center</option>
+          <option value="top">Top</option>
+          <option value="bottom">Bottom</option>
+        </select>
+      </div>
+
+      <!-- Overlay -->
+      <div>
+        <label class="block text-gray-700 font-semibold mb-2">Overlay PNG</label>
+        <input id="overlayInput" type="file" accept="image/png"
+               class="block w-full text-sm text-gray-700 bg-gray-50 border border-gray-300 rounded-lg cursor-pointer focus:ring-blue-500 focus:border-blue-500 p-2">
+      </div>
+
+      <!-- Opacity -->
+      <div>
+        <label class="block text-gray-700 font-semibold mb-2">Overlay Opacity</label>
+        <div class="flex items-center gap-2">
+          <input id="opacityRange" type="range" min="0" max="100" value="100"
+                 class="w-full accent-blue-600 cursor-pointer">
+          <span id="opacityValue" class="text-gray-700 font-medium w-10 text-right">100%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Buttons -->
+    <div class="flex justify-center gap-4 mb-8">
+      <button id="processBtn"
+              class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-lg transition-all shadow-md hover:shadow-lg">
+        Process Images
+      </button>
+
+      <button id="downloadBtn"
+              class="hidden bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-3 rounded-lg transition-all shadow-md hover:shadow-lg">
+        Download All as ZIP
+      </button>
+    </div>
+
+    <!-- Loading Indicator -->
+    <div id="loadingIndicator" class="hidden flex flex-col items-center mb-8">
+      <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+      <p class="text-gray-600 mt-2 font-medium">Processing images...</p>
+    </div>
+
+    <!-- Preview Grid -->
+    <div id="previewContainer"
+         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 w-full"></div>
+  </div>
+
+  <canvas id="canvas" class="hidden"></canvas>
+
+  <script>
+    const imageInput = document.getElementById('imageInput');
+    const overlayInput = document.getElementById('overlayInput');
+    const ratioSelect = document.getElementById('ratioSelect');
+    const cropPosition = document.getElementById('cropPosition');
+    const opacityRange = document.getElementById('opacityRange');
+    const opacityValue = document.getElementById('opacityValue');
+    const previewContainer = document.getElementById('previewContainer');
+    const processBtn = document.getElementById('processBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    let overlayImage = null;
+    let processedImages = [];
+
+    opacityRange.addEventListener('input', () => {
+      opacityValue.textContent = `${opacityRange.value}%`;
+    });
+
+    overlayInput.addEventListener('change', () => {
+      const file = overlayInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        overlayImage = new Image();
+        overlayImage.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    processBtn.addEventListener('click', async () => {
+      if (!imageInput.files.length) {
+        alert('Please upload at least one image.');
+        return;
+      }
+
+      const ratio = ratioSelect.value.split(':').map(Number);
+      const ratioW = ratio[0];
+      const ratioH = ratio[1];
+      const position = cropPosition.value;
+      const opacity = opacityRange.value / 100;
+
+      previewContainer.innerHTML = '';
+      processedImages = [];
+      downloadBtn.classList.add('hidden');
+      loadingIndicator.classList.remove('hidden');
+
+      for (const file of imageInput.files) {
+        const img = await loadImage(file);
+        const cropped = cropToRatio(img, ratioW, ratioH, position);
+
+        ctx.drawImage(cropped, 0, 0, canvas.width, canvas.height);
+
+        if (overlayImage) {
+          ctx.globalAlpha = opacity;
+          ctx.drawImage(overlayImage, 0, 0, canvas.width, canvas.height);
+          ctx.globalAlpha = 1.0;
+        }
+
+        const finalURL = canvas.toDataURL('image/png');
+        processedImages.push({
+          name: file.name.replace(/\.[^/.]+$/, ".png"),
+          dataUrl: finalURL
+        });
+
+        const imgElement = document.createElement('img');
+        imgElement.src = finalURL;
+        imgElement.className = 'rounded-xl shadow-md hover:shadow-lg transition-all duration-300 border border-gray-200';
+        previewContainer.appendChild(imgElement);
+      }
+
+      loadingIndicator.classList.add('hidden');
+      if (processedImages.length > 0) downloadBtn.classList.remove('hidden');
+    });
+
+    downloadBtn.addEventListener('click', async () => {
+      if (processedImages.length === 0) return;
+      const zip = new JSZip();
+
+      for (const img of processedImages) {
+        const base64 = img.dataUrl.split(',')[1];
+        zip.file(img.name, base64, { base64: true });
+      }
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      saveAs(blob, 'processed_images.zip');
+    });
+
+    function loadImage(file) {
+      return new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function cropToRatio(img, ratioW, ratioH, position = 'center') {
+      const originalW = img.width;
+      const originalH = img.height;
+      const targetRatio = ratioW / ratioH;
+      const currentRatio = originalW / originalH;
+
+      let cropW = originalW;
+      let cropH = originalH;
+
+      if (currentRatio > targetRatio) cropW = originalH * targetRatio;
+      else cropH = originalW / targetRatio;
+
+      let startX = (originalW - cropW) / 2;
+      let startY = (originalH - cropH) / 2;
+
+      if (position === 'top') startY = 0;
+      if (position === 'bottom') startY = originalH - cropH;
+
+      canvas.width = cropW;
+      canvas.height = cropH;
+      ctx.clearRect(0, 0, cropW, cropH);
+      ctx.drawImage(img, startX, startY, cropW, cropH, 0, 0, cropW, cropH);
+      return canvas;
+    }
+  </script>
+</body>
+</html>
